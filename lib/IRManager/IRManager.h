@@ -7,7 +7,7 @@
 class IRManager {
     public:
         // Constructor setups up our pins and timings 
-        IRManager(int recvPin, int ledPin, int outPin, unsigned long uniqueTime);
+        IRManager(int recvPin, int ledPin, unsigned long uniqueTime);
         
         void begin();
         void sendID();
@@ -18,7 +18,6 @@ class IRManager {
     private:
         int _recvPin;
         int _ledPin;
-        int _outPin;
         unsigned long _uniqueTime;
 
         mbed::PwmOut _IRLED;
