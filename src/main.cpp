@@ -3,8 +3,8 @@
 #include "IRManager.h"
 
 // Pin & Timing Config
-const int RECV_PIN = 2; // Digital Pin Number
-const int LED_PIN = 9;  // Digital Pin Number
+const int RECV_PIN = 9; // Digital Pin Number
+const int LED_PIN = 8;  // Digital Pin Number
 const unsigned long MY_UNIQUE_TIME = 1000; // Unique pulse duration in microseconds (e.g., 1400us for user ID 2, 1600us for user ID 3, etc.)
 
 // Instantiate IRManager
