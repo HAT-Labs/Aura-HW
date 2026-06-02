@@ -6,7 +6,7 @@ IRManager* IRManager::_instance = nullptr;
 // Constructor to initialize pins and timings
 IRManager::IRManager(int recvPin, int ledPin, unsigned long uniqueTime)
     : _recvPin(recvPin), _ledPin(ledPin), _uniqueTime(uniqueTime), _IRLED(digitalPinToPinName(ledPin)), 
-    _sending(false), _receiving(false), _readUserTime(0), _outState(LOW) {
+    _sending(false), _receiving(false), _readUserTime(0) {
     // Set the static instance pointer to this instance
     _instance = this;
 }
@@ -16,6 +16,9 @@ void IRManager::begin() {
 
     // Attach the static wrapper, not the class method directly, because ISRs can't be class methods
     attachInterrupt(digitalPinToPinName(_recvPin), isrWrapper, CHANGE);
+
+    // Set the LED high for the resting state
+    _IRLED.write(1.0f);
 }
 
 void IRManager::sendID() {
@@ -59,7 +62,7 @@ void IRManager::handleInterrupt() {
 }
 
 void IRManager::stopPulse() {
-    _IRLED.write(0.0f); // Turn off the LED
+    _IRLED.write(1.0f);
     _sending = false;
 }
 

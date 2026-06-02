@@ -27,7 +27,6 @@ class IRManager {
         volatile bool _sending;
         volatile bool _receiving;
         volatile int _readUserTime;
-        bool _outState;
 
         // The "Static Wraper" trick for ISRs
         static IRManager* _instance;
