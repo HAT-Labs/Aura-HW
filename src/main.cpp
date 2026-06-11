@@ -1,91 +1,81 @@
 #include <Arduino.h>
 #include "Arduino_BMI270_BMM150.h"
 #include "IRManager.h"
+#include "BLEManager.h"
+#include "DataPacket.h"
 
-// Pin & Timing Config
-const int RECV_PIN = 9; // Digital Pin Number
-const int LED_PIN = 8;  // Digital Pin Number
-const unsigned long MY_UNIQUE_TIME = 1000; // Unique pulse duration in microseconds (e.g., 1400us for user ID 2, 1600us for user ID 3, etc.)
+// --- Hardware Modules ---
+IRManager ir(2, 9, 1000); // Recv Pin 2, LED Pin 9
+BLEManager ble;
 
-// Instantiate IRManager
-IRManager ir(RECV_PIN, LED_PIN, MY_UNIQUE_TIME);
+// --- System Telemetry Instance ---
+SensorPacket currentPacket = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
-// Scalable User Tracking
-const int MAX_USERS = 5;
-bool userLooked[MAX_USERS] = {false};
-
-unsigned long currentTimeLoop = 0;
-unsigned long previousSend = 0;
-const unsigned long intervalSend = 100000;
-
-// IMU variables
-float ownx, owny, ownz;
-unsigned long previousMag = 0;
-const unsigned long intervalMag = 1000000;
-
-void ReadID(int readUserTime) {
-  // Filter out noise completely outside expected bounds
-  if (readUserTime < 900 || readUserTime > 2500) {
-    return;
-  }
-
-  int userID = (readUserTime - 900) / 200; // Map to user ID (0-4)
-
-  if( userID >= 0 && userID < MAX_USERS) {
-    userLooked[userID] = true; // Mark the user as looked at
-  }
-}
+// --- Hardware Interrupt Tickers ---
+mbed::Ticker TXTicker;
+volatile bool flagSendTX = false;
+void triggerTX() { flagSendTX = true; }
 
 void setup() {
   Serial.begin(115200);
-
   ir.begin();
+  IMU.begin();
+  ble.begin();
 
-  if(!IMU.begin()) {
-    Serial.println("Failed to initialize IMU!");
-    while(1);
-  }
+  // Set streaming transmission rate (e.g., 10Hz / every 100ms)
+  TXTicker.attach(&triggerTX, 0.1); 
 }
 
 void loop() {
+  ble.update();
 
-  currentTimeLoop = micros();
+  if (ble.getState() == STATE_STREAMING) {
 
-  // Handle incoming IR messages
-  if (ir.hasMessage()) {
-    ReadID(ir.getReceivedTime());
-    ir.acknowledgeMessage();
-  }
+    // 1. Accumulate IR glance detections asynchronously
+    if (ble.isIRRequested() && ir.hasNewMessage()) {
+      int pulseDuration = ir.getReceivedTime();
+      int identifiedUser = (pulseDuration - 900) / 200; 
 
-  // Poll Magnetometer
-  if( currentTimeLoop - previousMag >= intervalMag) {
-    IMU.readMagneticField(ownx, owny, ownz); // TODO: Ensure the axiis are properly aligned with the devices 
-    previousMag = currentTimeLoop;
-  }
-
-  // Transmit ID and Broadcast Data at 10Hz
-  if( currentTimeLoop - previousSend >= intervalSend) {
-    ir.sendID();
-    previousSend = currentTimeLoop;
-
-    // Dynamic Broadcast
-    unsigned int binaryDataWhoLooked = 0;
-    bool anyoneLooked = false;
-    for( int i = 0; i < MAX_USERS; i++) {
-      if(userLooked[i]) {
-        bitWrite(binaryDataWhoLooked, i, 1); 
-        anyoneLooked = true;
+      if (identifiedUser >= 0 && identifiedUser < 16) {
+        bitWrite(currentPacket.irLookedBitmask, identifiedUser, 1);
       }
+      ir.clearMessageFlag();
     }
 
-    //Only output to Serial if there is new data
-    if( anyoneLooked) {
-      Serial.println(binaryDataWhoLooked, BIN);
+    // 2. Synchronous Packet Compilation and Transmission
+    if (flagSendTX) {
+      flagSendTX = false; // Clear task flag
 
-      // Reset the user looked array for the next loop
-      for( int i = 0; i < MAX_USERS; i++) {
-        userLooked[i] = false;
+      // Assign the precise hardware timestamp
+      currentPacket.timestamp = millis(); 
+
+      // Poll IMU data safely if requested
+      if (ble.isIMURequested()) {
+        // Create naturally-aligned stack variables
+        float ax, ay, az;
+        float mx, my, mz;
+
+        // Read from the IMU into aligned variables (Safe for references)
+        IMU.readAcceleration(ax, ay, az);
+        IMU.readMagneticField(mx, my, mz);
+
+        // Safely copy the values into your packed struct
+        currentPacket.accX = ax;
+        currentPacket.accY = ay;
+        currentPacket.accZ = az;
+        currentPacket.magX = mx;
+        currentPacket.magY = my;
+        currentPacket.magZ = mz;
       }
+
+      // Simultaneously blast the IR identity pulse 
+      ir.sendID();
+
+      // Send the packed 30-byte payload instantly to the laptop
+      ble.sendPacket(currentPacket);
+
+      // Reset the tracking bitmask for the next timing frame
+      currentPacket.irLookedBitmask = 0;
     }
   }
 }
