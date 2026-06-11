@@ -18,9 +18,24 @@ void triggerTX() { flagSendTX = true; }
 
 void setup() {
   Serial.begin(115200);
+
+  delay(2000);
+  Serial.println("Starting Boot Sequence...");
+
   ir.begin();
-  IMU.begin();
-  ble.begin();
+  Serial.println("IR Initialized.");
+
+  if( !IMU.begin()) {
+    Serial.println("Failed to initialize IMU!");
+    while(1);
+  }
+  Serial.println("IMU Initialized.");
+
+  if( !ble.begin()) {
+    Serial.println("Failed to initialize BLE!");
+    while(1);
+  }
+  Serial.println("BLE Initialized.");
 
   // Set streaming transmission rate (e.g., 10Hz / every 100ms)
   TXTicker.attach(&triggerTX, 0.1); 
