@@ -5,7 +5,7 @@
 #include "DataPacket.h"
 
 // --- Hardware Modules ---
-IRManager ir(2, 9, 1000); // Recv Pin 2, LED Pin 9
+IRManager ir(2, 9); // Recv Pin 2, LED Pin 9
 BLEManager ble;
 
 // --- System Telemetry Instance ---
@@ -15,6 +15,9 @@ SensorPacket currentPacket = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 mbed::Ticker TXTicker;
 volatile bool flagSendTX = false;
 void triggerTX() { flagSendTX = true; }
+
+// Track whether the assigned ID has been pushed to IRManager for pulse width configuration
+bool identityConfigured = false;
 
 void setup() {
   Serial.begin(115200);
@@ -43,6 +46,16 @@ void setup() {
 
 void loop() {
   ble.update();
+
+  // Configure the IRManager with the assigned ID when BLE is streaming
+  if( ble.getState() == STATE_STREAMING && !identityConfigured) {
+    ir.setIdentity(ble.getAssignedID());
+    identityConfigured = true;
+  } // Reset the ID if streaming is interrupted or disconnected
+  if( ble.getState() != STATE_STREAMING ) {
+    identityConfigured = false;
+  }
+  
 
   if (ble.getState() == STATE_STREAMING) {
 

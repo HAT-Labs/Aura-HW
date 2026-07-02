@@ -44,6 +44,7 @@ void BLEManager::handleConfigWrite() {
 }
 
 SystemState BLEManager::getState() { return _currentState; }
+int BLEManager::getAssignedID() { return _assignedID; }
 bool BLEManager::isIRRequested() { return (_requestedModalities & 0x01); }
 bool BLEManager::isIMURequested() { return (_requestedModalities & 0x02); }
 

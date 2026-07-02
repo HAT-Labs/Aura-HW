@@ -2,9 +2,10 @@
 
 IRManager* IRManager::_instance = nullptr;
 
-IRManager::IRManager(int recvPin, int ledPin, unsigned long uniqueTime) 
+IRManager::IRManager(int recvPin, int ledPin) 
   : _recvPin(recvPin), _IRLED(digitalPinToPinName(ledPin)), 
-    _sending(false), _messageReceived(false), _readUserTime(0) {
+    _sending(false), _messageReceived(false), _readUserTime(0), 
+    _pulseWidthUs(_BASE_WIDTH_US) {
   _instance = this;
 }
 
@@ -14,11 +15,16 @@ void IRManager::begin() {
   _IRLED.write(1.0f); // Keep OFF initially (Low-Side MOSFET optimization)
 }
 
+void IRManager::setIdentity(int assignedID) {
+  // identifiedUser = (pulseDuration - 900) / 200;
+  _pulseWidthUs = _BASE_WIDTH_US + (unsigned long)(assignedID * _STEP_WIDTH_US);
+}
+
 void IRManager::sendID() {
   _sending = true;
   _IRLED.period_us(28); // 28us period = ~36kHz modulation
   _IRLED.write(0.5f);   // Start oscillating
-  _stopPulseTimeout.attach_us(&timeoutWrapper, 1000); // 1ms pulse width burst
+  _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
 }
 
 bool IRManager::hasNewMessage() { return _messageReceived; }
