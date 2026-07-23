@@ -22,7 +22,7 @@ void IRManager::setIdentity(int assignedID) {
 
 void IRManager::sendID() {
   _sending = true;
-  _IRLED.period_us(26); // 26us period = ~38kHz modulation
+  _IRLED.period_us(28); // 28us period = ~36kHz modulation
   _IRLED.write(0.5f);   // Start oscillating
   _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
 }
