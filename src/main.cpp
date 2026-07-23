@@ -5,7 +5,7 @@
 #include "DataPacket.h"
 
 // --- Hardware Modules ---
-IRManager ir(2, 9); // Recv Pin 2, LED Pin 9
+IRManager ir(9, 8); // Recv Pin 9, LED Pin 8
 BLEManager ble;
 
 // --- System Telemetry Instance ---
@@ -51,6 +51,7 @@ void loop() {
   if( ble.getState() == STATE_STREAMING && !identityConfigured) {
     ir.setIdentity(ble.getAssignedID());
     identityConfigured = true;
+    Serial.println("IR Identity Configured for User ID: " + String(ble.getAssignedID()));
   } // Reset the ID if streaming is interrupted or disconnected
   if( ble.getState() != STATE_STREAMING ) {
     identityConfigured = false;
