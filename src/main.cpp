@@ -56,7 +56,6 @@ void loop() {
     identityConfigured = false;
   }
   
-
   if (ble.getState() == STATE_STREAMING) {
 
     // 1. Accumulate IR glance detections asynchronously

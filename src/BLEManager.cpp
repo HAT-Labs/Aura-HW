@@ -17,6 +17,10 @@ bool BLEManager::begin() {
 
   BLE.setLocalName("SocialMonitorNode");
   BLE.setAdvertisedService(_sensorService);
+
+  // Data is getting transmitted at 10 Hz
+  BLE.setConnectionInterval(0x50, 0x60); // 100ms to 120ms
+
   _sensorService.addCharacteristic(_configChar);
   _sensorService.addCharacteristic(_dataChar);
   BLE.addService(_sensorService);
