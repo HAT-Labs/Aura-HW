@@ -64,7 +64,7 @@ void loop() {
       int pulseDuration = ir.getReceivedTime();
       int identifiedUser = (pulseDuration - 900) / 200; 
 
-      if (identifiedUser >= 0 && identifiedUser < 16) {
+      if (identifiedUser >= 0 && identifiedUser < 16 && ble.getAssignedID() != identifiedUser) {
         bitWrite(currentPacket.irLookedBitmask, identifiedUser, 1);
       }
       ir.clearMessageFlag();
