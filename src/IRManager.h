@@ -13,6 +13,7 @@ public:
   int getReceivedTime();
   void clearMessageFlag();
   void setIdentity(int assignedID);
+  int readIdentity(int pulseDuration);
 
 private:
   int _recvPin;
@@ -26,7 +27,7 @@ private:
   volatile unsigned long _pulseWidthUs;
 
   static const unsigned long _BASE_WIDTH_US = 1000;
-  static const unsigned long _STEP_WIDTH_US = 200;
+  static const unsigned long _STEP_WIDTH_US = 400;
 
   static IRManager* _instance;
   static void isrWrapper();

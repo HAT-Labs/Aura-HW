@@ -20,6 +20,10 @@ void IRManager::setIdentity(int assignedID) {
   _pulseWidthUs = _BASE_WIDTH_US + (unsigned long)(assignedID * _STEP_WIDTH_US);
 }
 
+int IRManager::readIdentity(int pulseDuration) {
+  return (pulseDuration - _BASE_WIDTH_US) / _STEP_WIDTH_US;
+}
+
 void IRManager::sendID() {
   _sending = true;
   _IRLED.period_us(28); // 28us period = ~36kHz modulation

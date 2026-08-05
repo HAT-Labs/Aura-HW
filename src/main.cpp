@@ -62,7 +62,7 @@ void loop() {
     // 1. Accumulate IR glance detections asynchronously
     if (ble.isIRRequested() && ir.hasNewMessage()) {
       int pulseDuration = ir.getReceivedTime();
-      int identifiedUser = (pulseDuration - 900) / 200; 
+      int identifiedUser = ir.readIdentity(pulseDuration); 
 
       if (identifiedUser >= 0 && identifiedUser < 16 && ble.getAssignedID() != identifiedUser) {
         bitWrite(currentPacket.irLookedBitmask, identifiedUser, 1);
