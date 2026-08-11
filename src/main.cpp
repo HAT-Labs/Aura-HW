@@ -82,10 +82,12 @@ void loop() {
         // Create naturally-aligned stack variables
         float ax, ay, az;
         float mx, my, mz;
+        float gx, gy, gz;
 
         // Read from the IMU into aligned variables (Safe for references)
         IMU.readAcceleration(ax, ay, az);
         IMU.readMagneticField(mx, my, mz);
+        IMU.readGyroscope(gx, gy, gz);
 
         // Safely copy the values into your packed struct
         currentPacket.accX = ax;
@@ -94,6 +96,9 @@ void loop() {
         currentPacket.magX = mx;
         currentPacket.magY = my;
         currentPacket.magZ = mz;
+        currentPacket.gyroX = gx;
+        currentPacket.gyroY = gy;
+        currentPacket.gyroZ = gz;
       }
 
       // Simultaneously blast the IR identity pulse 
