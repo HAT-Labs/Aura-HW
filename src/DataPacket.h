@@ -9,6 +9,8 @@ struct __attribute__((__packed__)) SensorPacket {
   uint16_t irLookedBitmask; // 2 bytes (supports tracking up to 16 distinct users)
   float accX, accY, accZ;   // 12 bytes (3 * 4 bytes)
   float magX, magY, magZ;   // 12 bytes (3 * 4 bytes)
-}; // Total packet size = 30 bytes
+  float gyroX, gyroY, gyroZ; // 12 bytes (3 * 4 bytes)
+
+}; // Total packet size = 42 bytes
 
 #endif
