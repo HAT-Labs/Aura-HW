@@ -1,3 +1,4 @@
+#include "nrf52840_bitfields.h"
 #include <Arduino.h>
 #include <Arduino_BMI270_BMM150.h>
 #include <ArduinoBLE.h>
@@ -231,26 +232,18 @@ static int n = 0;
 // fs = 100 Hz (matches IMU.gyroscopeSampleRate() / LPF_Init/HPF_Init above).
 // f = 2.3, 2.9, 3.5 Hz -> 2*pi*f = 14.4, 18.22, 21.99.
 
-
+#define win_len 32
 struct store{
   double ref;
   double reff_shifted;
   double inv_ref;
-  double envelope;
-
   double xt;
-
-
-  double z[50];
-  double e[50];
-  
+  double z[win_len];
+  double e[win_len];
   int i = 0;
-
+  int k = 0;
   double phase_inc[3] = {14.4/100, 18.22/100, 21.99/100};
   double phase1 = 0.0, phase2 = 0.0, phase3 = 0.0;
-
-  double energy = 0;
-  double rmse;
 };
 
 struct store master;
@@ -261,12 +254,15 @@ static inline float safe_log(float x) {
   return log(x > LOG_EPS ? x : LOG_EPS);
 }
 
-static inline void detect(double w0, double a0, unsigned long ts) {
+
+bool detect(double w0, double a0, unsigned long ts) {
   
   //data->xt = safe_log(data->xt);
   data->xt = (1.0 / 5.0)*cbrt(w0);
-  //Serial.println(data->xt);
-  // Serial.println(data->xt);
+
+  // Serial.print(data -> xt);
+  // Serial.print(" ");
+  // Serial.println(a0);
   
   data->phase1 += data->phase_inc[0];
   if (data->phase1 > 2.0*PI) data->phase1 -= 2.0*PI;
@@ -274,23 +270,41 @@ static inline void detect(double w0, double a0, unsigned long ts) {
   if (data->phase2 > 2.0*PI) data->phase2 -= 2.0*PI;
   data->phase3 += data->phase_inc[2];
   if (data->phase3 > 2.0*PI) data->phase3 -= 2.0*PI;
-
+  
   data->ref = sin(data->phase1);
   data->reff_shifted = cos(data->phase2);
   data->inv_ref = -sin(data->phase3);
-  data->envelope = (0.5*cos(n + (PI / 4)))*(data->ref - data->reff_shifted - data->inv_ref);
 
+  data ->e[data->i++] = (0.5*cos(n + (PI / 4)))*(data->ref + data->reff_shifted * data->inv_ref);
   data->z[data->i] = data->xt;
-  data->e[data->i] = data->envelope;   
   
-  double dot_product = 0.0;
-  for (int i = 0; i < 50; ++i) {
-    dot_product += data->z[i] * data->e[i];
+  double sum = 0.0;
+  if (data -> i > win_len) {
+    for (int i = 0; i < win_len; i++) {
+      sum += fabs(data->z[i] - data->e[i]);
+    }
+    sum = sum * a0;
+    if (sum > 12.50 && sum < 14.50 && (a0 < 1 && a0 > 0)) notifyHeadNod(2, ts);
+    //Serial.println(sum);
+    data ->i = 0;
   }
-
-  if (dot_product > 0 && dot_product < 0.7) {
-    notifyHeadNod(2, ts);
-  }
+  
+  
+  // double dot_product = 0.0;
+  // for (int i = 0; i < 50; ++i) {
+  //   dot_product += data->z[i] * data->e[i];
+  // }
+  bool nodded = false;
+  // if (dot_product < 0.85 && dot_product > 0.65) {
+  //   notifyHeadNod(2, ts); 
+  //   nodded = true; 
+  // }
+  // data->i++;
+  return nodded;
+  // if (dot_product > 0 && dot_product < 0.7) {
+  //   notifyHeadNod(2, ts);
+  //   return true;
+  // }
 
   // if (data->i >= 50) {
   //   double best_corr = -1e9;
@@ -307,11 +321,7 @@ static inline void detect(double w0, double a0, unsigned long ts) {
   //   }
   //   data->i = 0;
   // }
-  if (data->i >= 50) {
-    data->i = 0;
-  } else {
-    data->i++;
-  }
+  
 }
 
 
@@ -486,7 +496,14 @@ void loop() {
   //abacv_push(gz, ts);
   unsigned long endTime = micros();
   unsigned long executionTime = (endTime - startTime) - overhead;
-  //Serial.println(executionTime);
+  static int i = 0;
+  if (i++ < 2) {
+    Serial.println(executionTime);
+    delay(1000);
+    i = 0;
+  }
+    
+
    
     
   
