@@ -9,7 +9,7 @@ IRManager ir(9, 8); // Recv Pin 9, LED Pin 8
 BLEManager ble;
 
 // --- System Telemetry Instance ---
-SensorPacket currentPacket = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+SensorPacket currentPacket = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
 // --- Hardware Interrupt Tickers ---
 mbed::Ticker TXTicker;
@@ -81,19 +81,55 @@ void loop() {
       if (ble.isIMURequested()) {
         // Create naturally-aligned stack variables
         float ax, ay, az;
-        float mx, my, mz;
 
         // Read from the IMU into aligned variables (Safe for references)
         IMU.readAcceleration(ax, ay, az);
-        IMU.readMagneticField(mx, my, mz);
 
         // Safely copy the values into your packed struct
         currentPacket.accX = ax;
         currentPacket.accY = ay;
         currentPacket.accZ = az;
+      } else {
+        // If IMU data is not requested, zero it out
+        currentPacket.accX = 0.0f;
+        currentPacket.accY = 0.0f;
+        currentPacket.accZ = 0.0f;
+      }
+
+      if (ble.isMagRequested()) {
+        // If magnetometer data is requested, ensure it's read and included
+        float mx, my, mz;
+
+        // Read from the magnetometer
+        IMU.readMagneticField(mx, my, mz);
+
+        // Pack the magnetometer data into the struct
         currentPacket.magX = mx;
         currentPacket.magY = my;
         currentPacket.magZ = mz;
+      } else {
+        // If magnetometer data is not requested, zero it out
+        currentPacket.magX = 0.0f;
+        currentPacket.magY = 0.0f;
+        currentPacket.magZ = 0.0f;
+      }
+
+      if (ble.isGyroRequested()) {
+        // If gyro data is requested, ensure it's read and included
+        float gx, gy, gz;
+
+        // Read from the gyroscope
+        IMU.readGyroscope(gx, gy, gz);
+
+        // Pack the gyroscope data into the struct
+        currentPacket.gyroX = gx;
+        currentPacket.gyroY = gy;
+        currentPacket.gyroZ = gz;
+      } else {
+        // If gyroscope data is not requested, zero it out
+        currentPacket.gyroX = 0.0f;
+        currentPacket.gyroY = 0.0f;
+        currentPacket.gyroZ = 0.0f;
       }
 
       // Simultaneously blast the IR identity pulse 

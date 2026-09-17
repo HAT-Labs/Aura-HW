@@ -51,6 +51,8 @@ SystemState BLEManager::getState() { return _currentState; }
 int BLEManager::getAssignedID() { return _assignedID; }
 bool BLEManager::isIRRequested() { return (_requestedModalities & 0x01); }
 bool BLEManager::isIMURequested() { return (_requestedModalities & 0x02); }
+bool BLEManager::isMagRequested() { return (_requestedModalities & 0x04); }
+bool BLEManager::isGyroRequested() { return (_requestedModalities & 0x08); }
 
 void BLEManager::sendPacket(const SensorPacket& packet) {
   if (_currentState != STATE_STREAMING) return;

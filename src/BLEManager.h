@@ -21,6 +21,8 @@ public:
   int getAssignedID();
   bool isIRRequested();
   bool isIMURequested();
+  bool isMagRequested();
+  bool isGyroRequested();
 
   // Sends the entire consolidated struct over the air
   void sendPacket(const SensorPacket& packet);
