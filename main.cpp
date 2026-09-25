@@ -3,8 +3,11 @@
 #include <Arduino_BMI270_BMM150.h>
 #include <ArduinoBLE.h>
 #include <sys/_types.h>
+
 #define HEADNOD_SERVICE_UUID        "19b10000-e8f2-537e-4f6c-d104768a1214"
 #define HEADNOD_CHARACTERISTIC_UUID "19b10001-e8f2-537e-4f6c-d104768a1214"
+#define DATA_CHARACTERISTIC_UUID "19b10002-e8f2-537e-4f6c-d104768a1214"
+
 #include <math.h>
 
 static BLEService headNodService(HEADNOD_SERVICE_UUID);
@@ -26,12 +29,92 @@ static void notifyHeadNod(int algoId, unsigned long ts) {
 }
 
 // ---------------------------------------------------------------------------
-// ALGORITHM 1 -- commented out (matches algorithms.txt's "#DO NOT REMOVE"
-// block): fixed 100-sample trailing window (window = primary[i-100 .. i],
-// i.e. up to 101 samples once the stream is warmed up) gated on variance +
-// peak-to-peak. rolling_rms(window, K_WIN) is computed and discarded, same
-// as in the original -- kept here for fidelity even though it doesn't
-// affect any detection.
+// Algorithm identifiers -- one entry per detector implemented below (active
+// or currently commented out). Used to index the execution-time stats table.
+// ---------------------------------------------------------------------------
+enum AlgoId {
+  ALGO_VARIANCE_PTP_GATE = 0,   // algorithm1_variancePtpGate         (commented out)
+  ALGO_STFT_BAND_ENERGY  = 1,   // algorithm2_stftBandEnergy          (ACTIVE)
+  ALGO_QUADRATURE_CORR   = 2,   // algorithm3_quadratureCorrelation   (commented out)
+  ALGO_STATE_MACHINE     = 3,   // algorithm4_stateMachineUpDownZero  (commented out)
+  ALGO_AUTOCOVARIANCE    = 4,   // algorithm5_autocovarianceGate      (commented out)
+  ALGO_COUNT
+};
+
+// ---------------------------------------------------------------------------
+// Execution-time instrumentation
+//
+// - lastExecUs is refreshed every loop() pass ("every instant") with the raw
+//   micros() delta of that pass's algorithm call.
+// - Once per second (millis()-gated, so it never blocks via delay()) that
+//   instantaneous reading is folded into a 25-sample batch.
+// - Once the batch reaches TIMING_AVERAGE_WINDOW (25) samples, the average
+//   execution time over those ~25 seconds is computed, reported, and the
+//   batch resets for the next window.
+// ---------------------------------------------------------------------------
+#define TIMING_SAMPLE_INTERVAL_MS 1000   // grab a timed sample once per second
+#define TIMING_AVERAGE_WINDOW     25     // average every 25 program steps (samples)
+
+struct AlgoTiming {
+  const char   *name;
+  unsigned long lastExecUs;                     // latest single call
+  unsigned long lastReportUs;                   // gate for the 1 s print
+  unsigned long sum, minUs, maxUs, maxAtUs;     // per-window stats, all µs
+  unsigned long firstSpikeUs, lastSpikeUs;      // spike timestamps, µs
+  unsigned int  count, spikes;                  // calls / spikes this window
+};
+
+static AlgoTiming algoTiming[ALGO_COUNT] = {
+  { "Algorithm 1 (Variance/Peak-to-Peak Gate)",      0, 0, 0, 0, 0 },
+  { "Algorithm 2 (STFT Band-Energy Gate)",           0, 0, 0, 0, 0 },
+  { "Algorithm 3 (Quadrature Reference Correlation)",0, 0, 0, 0, 0 },
+  { "Algorithm 4 (UP/DOWN/ZERO State Machine)",      0, 0, 0, 0, 0 },
+  { "Algorithm 5 (Autocovariance Gate)",             0, 0, 0, 0, 0 },
+};
+
+#define REPORT_US 1000000UL
+#define SPIKE_US   100000UL
+
+// AlgoTiming: unsigned long lastReportUs, sum, minUs, maxUs, maxAtUs, firstSpikeUs, lastSpikeUs;
+//             unsigned int  count, spikes;   (init minUs = ~0UL)
+static void recordExecutionTime(AlgoId id, unsigned long execUs, unsigned long nowUs) {
+  AlgoTiming &t = algoTiming[id];
+  t.sum += execUs;
+  t.count++;
+  if (execUs < t.minUs) t.minUs = execUs;
+  if (execUs > t.maxUs) { t.maxUs = execUs; t.maxAtUs = nowUs; }
+  if (execUs > SPIKE_US) {
+    if (t.spikes++ == 0) t.firstSpikeUs = nowUs;
+    t.lastSpikeUs = nowUs;
+  }
+
+  if (nowUs - t.lastReportUs < REPORT_US) return;
+  t.lastReportUs = nowUs;
+
+  Serial.print(t.name);
+  Serial.print(" n=");         Serial.print(t.count);
+  Serial.print(" avg_us=");    Serial.print(t.sum / t.count);
+  Serial.print(" min_us=");    Serial.print(t.minUs);
+  Serial.print(" max_us=");    Serial.print(t.maxUs);
+  Serial.print(" max_at_us="); Serial.print(t.maxAtUs);
+  Serial.print(" spikes=");    Serial.print(t.spikes);
+  if (t.spikes > 1) {
+    Serial.print(" period_us=");
+    Serial.print((t.lastSpikeUs - t.firstSpikeUs) / (t.spikes - 1));
+  }
+  Serial.println();
+
+  t.sum = t.count = t.maxUs = t.spikes = 0;
+  t.minUs = ~0UL;
+}
+
+// Records one execution-time reading for algorithm `id`. Call this right
+// after timing that algorithm's call in loop(), passing the micros() delta
+// and the current millis() timestamp.
+
+// ---------------------------------------------------------------------------
+// ALGORITHM 1 -- commented out: rolling variance / peak-to-peak gate over a
+// K1_WIN-sample ring buffer of the primary (gyro) signal.
 // ---------------------------------------------------------------------------
 /*
 #define K1_WIN 100
@@ -75,7 +158,7 @@ static void k1_rolling_rms(const double *v, int n, int window, double *out) {
     }
 }
 
-bool detect(double primary, double confirm, unsigned long ts) {
+bool algorithm1_variancePtpGate(double primary, double confirm, unsigned long ts) {
     (void)confirm;  // threaded through for parity; not gated on (see file header)
 
     k1_buf[k1_idx] = primary;
@@ -94,16 +177,6 @@ bool detect(double primary, double confirm, unsigned long ts) {
     // gyro motion is getting to the var>150 && ptp>45 gate.
     static unsigned long k1_last_print = 0;
     if (ts - k1_last_print >= 200) {
-        Serial.print("algo1 diag gz=");
-        Serial.print(primary);
-        Serial.print(" var=");
-        Serial.print(window_var);
-        Serial.print(" ptp=");
-        Serial.print(ptp);
-        Serial.print(" gated=");
-        Serial.print(gated);
-        Serial.print(" armed=");
-        Serial.println(k1_armed);
         k1_last_print = ts;
     }
 
@@ -122,9 +195,9 @@ bool detect(double primary, double confirm, unsigned long ts) {
     }
     return fired;
 }
+*/
 
 
-/*
 // ---------------------------------------------------------------------------
 // ALGORITHM 2 -- ACTIVE: batch 25 samples, run one STFT frame over the
 // batch (Hann-windowed, zero-padded to frame_size=50, real DFT -- Ops.stft's
@@ -168,7 +241,7 @@ static void k2_dft_magnitude(const double *x, int N, double *mag) {
     }
 }
 
-bool detect(double primary, double confirm, unsigned long ts) {
+bool algorithm2_stftBandEnergy(double primary, double confirm, unsigned long ts) {
     (void)confirm;  // threaded through for parity; not gated on (see file header)
 
     if (!k2_hann_init) k2_init_hann();
@@ -207,8 +280,8 @@ bool detect(double primary, double confirm, unsigned long ts) {
     }
     return fired;
 }
-*/
- 
+
+
 // ---------------------------------------------------------------------------
 // ALGORITHM 3 -- commented out: UP/DOWN/ZERO/IDLE state machine. `window` in
 // the source is always exactly the contiguous run of samples appended since
@@ -226,12 +299,11 @@ bool detect(double primary, double confirm, unsigned long ts) {
 #define PARAM 200
 #define CAP 4096
 #define REFRACTORY_MS 280
-static int n = 0;
+
 
 // Phase increment per sample (rad/sample) = 2*pi*f / fs for each tone,
 // fs = 100 Hz (matches IMU.gyroscopeSampleRate() / LPF_Init/HPF_Init above).
 // f = 2.3, 2.9, 3.5 Hz -> 2*pi*f = 14.4, 18.22, 21.99.
-
 #define win_len 32
 struct store{
   double ref;
@@ -248,15 +320,22 @@ struct store{
 
 struct store master;
 struct store *data = &master;
+static int n = 0;
 
 #define LOG_EPS 1e-6f
 static inline float safe_log(float x) {
   return log(x > LOG_EPS ? x : LOG_EPS);
 }
 
+void print(auto data) {
+  Serial.println(data);
+}
 
-bool detect(double w0, double a0, unsigned long ts) {
-  
+// ALGORITHM 3 -- commented out: quadrature reference correlation. Builds a
+// synthetic reference signal from three phase-accumulated tones and compares
+// it against a log/cbrt-compressed transform of the primary signal.
+bool algorithm3_quadratureCorrelation(double w0, double a0, unsigned long ts) {
+
   //data->xt = safe_log(data->xt);
   data->xt = (1.0 / 5.0)*cbrt(w0);
 
@@ -283,13 +362,13 @@ bool detect(double w0, double a0, unsigned long ts) {
     for (int i = 0; i < win_len; i++) {
       sum += fabs(data->z[i] - data->e[i]);
     }
+
     sum = sum * a0;
+    print(sum);
     if (sum > 12.50 && sum < 14.50 && (a0 < 1 && a0 > 0)) notifyHeadNod(2, ts);
     //Serial.println(sum);
     data ->i = 0;
   }
-  
-  
   // double dot_product = 0.0;
   // for (int i = 0; i < 50; ++i) {
   //   dot_product += data->z[i] * data->e[i];
@@ -324,7 +403,6 @@ bool detect(double w0, double a0, unsigned long ts) {
   
 }
 
-
 /*
 typedef enum { UP = 0, DOWN = 1, ZERO = 2} state_t;
 
@@ -338,7 +416,9 @@ static unsigned long down_entry_ts = 0;
 static int N = 0;
 static unsigned long start_ms = 0;
 static double accumulate = 0;
-inline void detect(double main, double side, unsigned long ts) {
+// ALGORITHM 4 -- commented out: UP/DOWN/ZERO/IDLE state machine gating on
+// accumulated gyro energy within a run of samples since the last release.
+inline void algorithm4_stateMachineUpDownZero(double main, double side, unsigned long ts) {
   // threaded through for parity; not gated on (see file header)
   double gz = main;
   double ax = side;
@@ -352,7 +432,7 @@ inline void detect(double main, double side, unsigned long ts) {
   switch (state) {
     case UP: 
 
-      if (gz > 250 && ax >= -0.15 && ax < 0.25) {
+      if (gz  < -250 && ax >= -0.15 && ax < 0.25) {
         down_entry_ts = ts;
         state = DOWN;
       }
@@ -391,9 +471,11 @@ inline void detect(double main, double side, unsigned long ts) {
 
   }
 }
-
-
-// Claude Alg A
+*/
+/*
+// ALGORITHM 5 -- commented out: autocovariance gate (formerly "Claude Alg A").
+// IDLE -> PRELIM -> VALID state machine gating on lag-1..lag-4 autocovariance
+// of the primary signal.
 #define WIN_LAG   4      // samples, lag-1..lag-4 autocovariance
 #define VALID_LEN 32
 #define THETA_PRE 300    // tune from noise floor
@@ -413,7 +495,7 @@ typedef struct {
 abacv_t abc;
 abacv_t *s = &abc;
 
-static void abacv_push(int16_t x, unsigned long ts) {
+static void algorithm5_autocovarianceGate(int16_t x, unsigned long ts) {
     s->buf[s->idx] = x;
     s->idx = (s->idx + 1) % VALID_LEN;
 
@@ -447,7 +529,7 @@ static void abacv_push(int16_t x, unsigned long ts) {
 static unsigned long led_off_at = 0;
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   unsigned long wait_start = millis();
   while (!Serial && millis() - wait_start < 2000) { }  // don't hang if untethered
 
@@ -467,10 +549,14 @@ void setup() {
     Serial.println("Failed to initialize BLE!");
     while (1) { }
   }
-  BLE.setLocalName("HeadNod");
+
+  BLE.setLocalName("SocialMonitorNode");
   BLE.setAdvertisedService(headNodService);
   headNodService.addCharacteristic(headNodChar);
+  headNodService.addCharacteristic(headNodChar);
+  
   BLE.addService(headNodService);
+
   uint8_t initial[5] = {0, 0, 0, 0, 0};
   headNodChar.writeValue(initial, sizeof(initial));
   BLE.advertise();
@@ -478,34 +564,40 @@ void setup() {
 }
 
 
+// Original timing method (benchStart/benchEnd overhead calibration, then
+// timing the millis()/IMU-read/algorithm block against it), packaged into a
+// function. Reports the timestamp of this pass via tsOut and returns the
+// measured execution time in microseconds.
+// static unsigned long benchAlgorithm2StftBandEnergy(unsigned long &tsOut) {
+//   unsigned long benchStart = micros();
+//   unsigned long benchEnd = micros();
+//   unsigned long overhead = benchEnd - benchStart;
 
-void loop() {
-  BLE.poll();
-
-  unsigned long benchStart = micros();
-  unsigned long benchEnd = micros();
-  unsigned long overhead = benchEnd - benchStart;
+//   unsigned long startTime = micros();
+//   unsigned long ts = millis();
   
-  unsigned long startTime = micros();
-  unsigned long ts = millis();
+//   algorithm2_stftBandEnergy(gz, ax, ts);
+//   unsigned long endTime = micros();
+
+//   tsOut = ts;
+//   return (endTime - startTime) - overhead;
+// }
+
+void detection_test() {
+  
   float gx, gy, gz;
   IMU.readGyroscope(gx, gy, gz);
   float ax = 0, ay = 0, az = 0;
   IMU.readAcceleration(ax, ay, az);
-  detect(gz, ax, ts);
-  //abacv_push(gz, ts);
-  unsigned long endTime = micros();
-  unsigned long executionTime = (endTime - startTime) - overhead;
-  static int i = 0;
-  if (i++ < 2) {
-    Serial.println(executionTime);
-    delay(1000);
-    i = 0;
-  }
-    
+  algorithm3_quadratureCorrelation(gz, ax, millis());
+}
 
-   
-    
-  
+void loop() {
+  BLE.poll();
 
+  unsigned long ts;
+ // unsigned long executionTime = benchAlgorithm2StftBandEnergy(ts);
+  // Grabbed every instant (this pass) and folded into a 1s-sampled,
+  // 25-step average -- see recordExecutionTime() above.
+  detection_test();
 }
