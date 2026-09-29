@@ -25,6 +25,8 @@ public:
   bool isGyroRequested();
   // True once per config write that carried the optional third byte (IR carrier duty, percent)
   bool takeCarrierDutyUpdate(int& percent);
+  // This chip's 64-bit factory device ID as 16 hex characters; tells nodes apart in logs
+  static String nodeUid();
 
   // Sends the entire consolidated struct over the air
   void sendPacket(const SensorPacket& packet);
@@ -39,6 +41,7 @@ private:
   BLEService _sensorService;
   BLECharacteristic _configChar;
   BLECharacteristic _dataChar; // Adjusted for structural data payloads
+  BLECharacteristic _uidChar;
 
   void handleConfigWrite();
 };

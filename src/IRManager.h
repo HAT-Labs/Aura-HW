@@ -6,6 +6,14 @@
 
 class IRManager {
 public:
+  // Raw event for the E0 measurement log: 'R' = received pulse (start time, width),
+  // 'T' = own transmission (start time, burst length). Times are micros().
+  struct RawEvent {
+    char kind;
+    uint32_t tUs;
+    uint32_t widthUs;
+  };
+
   IRManager(int recvPin, int ledPin);
   void begin();
   void sendID();
@@ -17,6 +25,9 @@ public:
   void setCarrierDuty(int percent); // LED on-time per carrier period, rounded to whole us (7-50 %)
   int getCarrierOnUs();
   int getCarrierPeriodUs();
+  void startCarrierTest(uint32_t ms); // continuous carrier at the current duty, then off; beacons pause
+  bool popRawEvent(RawEvent& event);
+  uint32_t takeDroppedEvents();       // events lost because the buffer was full since the last call
 
 private:
   int _recvPin;
@@ -29,6 +40,15 @@ private:
   volatile int _readUserTime;
   volatile unsigned long _pulseWidthUs;
   int _carrierOnUs;
+  volatile bool _carrierTest;
+  volatile uint32_t _pulseStartUs;
+
+  // Written from the receiver ISR and from sendID(), read by loop(); guarded by a critical section
+  static const int _RAW_BUFFER_SIZE = 64;
+  RawEvent _rawEvents[_RAW_BUFFER_SIZE];
+  volatile uint32_t _rawHead;
+  volatile uint32_t _rawTail;
+  volatile uint32_t _rawDropped;
 
   static const unsigned long _BASE_WIDTH_US = 1000;
   static const unsigned long _STEP_WIDTH_US = 400;
@@ -52,5 +72,7 @@ private:
   void handleInterrupt();
   void stopPulse();
   void ledOff();
+  void startCarrier();
+  void pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs);
 };
 #endif

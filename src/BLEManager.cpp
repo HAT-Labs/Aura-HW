@@ -3,6 +3,7 @@
 #define SERVICE_UUID        "19B10000-E8F2-537E-4F6C-D104768A1214"
 #define CONFIG_CHAR_UUID    "19B10001-E8F2-537E-4F6C-D104768A1214"
 #define DATA_CHAR_UUID      "19B10002-E8F2-537E-4F6C-D104768A1214"
+#define UID_CHAR_UUID       "19B10003-E8F2-537E-4F6C-D104768A1214"
 
 BLEManager::BLEManager() : 
   _currentState(STATE_DISCONNECTED), _assignedID(-1), _requestedModalities(0),
@@ -11,8 +12,15 @@ BLEManager::BLEManager() :
   // {ID, modality mask} or {ID, modality mask, IR carrier duty %}
   _configChar(CONFIG_CHAR_UUID, BLERead | BLEWrite, 3),
   // Allocate characteristic size dynamically using our struct dimension
-  _dataChar(DATA_CHAR_UUID, BLERead | BLENotify, sizeof(SensorPacket)) 
+  _dataChar(DATA_CHAR_UUID, BLERead | BLENotify, sizeof(SensorPacket)),
+  _uidChar(UID_CHAR_UUID, BLERead, 16)
 {}
+
+String BLEManager::nodeUid() {
+  char uid[17];
+  snprintf(uid, sizeof(uid), "%08lX%08lX", (unsigned long)NRF_FICR->DEVICEID[1], (unsigned long)NRF_FICR->DEVICEID[0]);
+  return String(uid);
+}
 
 bool BLEManager::begin() {
   if (!BLE.begin()) return false;
@@ -25,7 +33,9 @@ bool BLEManager::begin() {
 
   _sensorService.addCharacteristic(_configChar);
   _sensorService.addCharacteristic(_dataChar);
+  _sensorService.addCharacteristic(_uidChar);
   BLE.addService(_sensorService);
+  _uidChar.writeValue(nodeUid().c_str());
   BLE.advertise();
   return true;
 }

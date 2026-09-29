@@ -21,11 +21,22 @@ bool identityConfigured = false;
 
 // --- Bench commands over USB serial, one per line ---
 // DUTY <percent> : IR carrier duty (LED on-time per 28 us period), 7-50 %
+// CARRIER [ms]   : continuous carrier at the current duty for ms (default 3000, max 5000), for a meter check
+// RAW 0|1        : stop / resume the raw event lines (default on)
+// INFO           : I,<chip uid>,<assigned ID>,<carrier on us>,<carrier period us>,<BLE state>
+// Raw event lines: R,<start us>,<width us>,<decoded ID or -1> for each received pulse,
+//                  T,<start us>,<burst us> for each own transmission, D,<n> if n events were lost
 String serialLine;
+bool rawLogging = true;
 
 void printCarrierDuty() {
   Serial.println("IR carrier duty: " + String(ir.getCarrierOnUs()) + "/" + String(ir.getCarrierPeriodUs()) +
                  " us on (" + String(100.0f * ir.getCarrierOnUs() / ir.getCarrierPeriodUs(), 1) + " %)");
+}
+
+void printInfo() {
+  Serial.println("I," + BLEManager::nodeUid() + "," + String(ble.getAssignedID()) + "," +
+                 String(ir.getCarrierOnUs()) + "," + String(ir.getCarrierPeriodUs()) + "," + String((int)ble.getState()));
 }
 
 void handleSerialCommands() {
@@ -37,11 +48,38 @@ void handleSerialCommands() {
     if (serialLine.startsWith("DUTY ")) {
       ir.setCarrierDuty(serialLine.substring(5).toInt());
       printCarrierDuty();
+    } else if (serialLine == "CARRIER" || serialLine.startsWith("CARRIER ")) {
+      long ms = serialLine.length() > 8 ? serialLine.substring(8).toInt() : 3000;
+      ms = constrain(ms, 1, 5000);
+      ir.startCarrierTest(ms);
+      Serial.println("Carrier test: " + String(ms) + " ms continuous, " + String(ir.getCarrierOnUs()) + "/" +
+                     String(ir.getCarrierPeriodUs()) + " us on");
+    } else if (serialLine == "RAW 0" || serialLine == "RAW 1") {
+      rawLogging = serialLine.endsWith("1");
+    } else if (serialLine == "INFO") {
+      printInfo();
     } else if (serialLine.length() > 0) {
       Serial.println("Unknown command: " + serialLine);
     }
     serialLine = "";
   }
+}
+
+void printRawEvents() {
+  IRManager::RawEvent event;
+  char line[48];
+  for (int n = 0; n < 16 && ir.popRawEvent(event); n++) {
+    if (!rawLogging) continue;
+    if (event.kind == 'R') {
+      snprintf(line, sizeof(line), "R,%lu,%lu,%d", (unsigned long)event.tUs, (unsigned long)event.widthUs,
+               ir.readIdentity((int)event.widthUs));
+    } else {
+      snprintf(line, sizeof(line), "T,%lu,%lu", (unsigned long)event.tUs, (unsigned long)event.widthUs);
+    }
+    Serial.println(line);
+  }
+  uint32_t dropped = ir.takeDroppedEvents();
+  if (dropped > 0 && rawLogging) Serial.println("D," + String(dropped));
 }
 
 void setup() {
@@ -65,6 +103,7 @@ void setup() {
     while(1);
   }
   Serial.println("BLE Initialized.");
+  printInfo();
 
   // Set streaming transmission rate (e.g., 10Hz / every 100ms)
   TXTicker.attach(&triggerTX, 0.1); 
@@ -73,6 +112,7 @@ void setup() {
 void loop() {
   ble.update();
   handleSerialCommands();
+  printRawEvents();
 
   // Apply a carrier duty sent by the laptop (optional third config byte). The latest command wins.
   int dutyPercent;

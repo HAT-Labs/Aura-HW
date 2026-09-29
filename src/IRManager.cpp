@@ -5,7 +5,8 @@ IRManager* IRManager::_instance = nullptr;
 IRManager::IRManager(int recvPin, int ledPin) 
   : _recvPin(recvPin), _IRLED(digitalPinToPinName(ledPin)), 
     _sending(false), _messageReceived(false), _readUserTime(0), 
-    _pulseWidthUs(_BASE_WIDTH_US), _carrierOnUs(_MAX_CARRIER_ON_US) {
+    _pulseWidthUs(_BASE_WIDTH_US), _carrierOnUs(_MAX_CARRIER_ON_US),
+    _carrierTest(false), _pulseStartUs(0), _rawHead(0), _rawTail(0), _rawDropped(0) {
   _instance = this;
 }
 
@@ -40,11 +41,24 @@ int IRManager::getCarrierOnUs() { return _carrierOnUs; }
 int IRManager::getCarrierPeriodUs() { return _CARRIER_PERIOD_US; }
 
 void IRManager::sendID() {
+  if (_carrierTest) return; // a carrier test owns the LED until it ends
   _sending = true;
+  pushRawEvent('T', micros(), _pulseWidthUs);
+  startCarrier();
+  _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
+}
+
+void IRManager::startCarrierTest(uint32_t ms) {
+  _carrierTest = true;
+  _sending = true;
+  startCarrier();
+  _stopPulseTimeout.attach_us(&timeoutWrapper, (us_timestamp_t)ms * 1000);
+}
+
+void IRManager::startCarrier() {
   _IRLED.period_us(_CARRIER_PERIOD_US); // 28us period = ~36kHz modulation
   // Start oscillating: the LED is on for _carrierOnUs of every period
   _IRLED.pulsewidth_us(_PWM_INVERTED ? _CARRIER_PERIOD_US - _carrierOnUs : _carrierOnUs);
-  _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
 }
 
 bool IRManager::hasNewMessage() { return _messageReceived; }
@@ -58,12 +72,14 @@ void IRManager::handleInterrupt() {
     if (currentState != lastState) {
       lastState = currentState;
       if (currentState == LOW) { // IR Receivers usually pull LOW when detecting light
+        _pulseStartUs = micros();
         _pulseTimer.reset();
         _pulseTimer.start();
       } else {
         _pulseTimer.stop();
         _readUserTime = _pulseTimer.read_us();
         _messageReceived = true;
+        pushRawEvent('R', _pulseStartUs, _readUserTime);
       }
     }
   }
@@ -72,6 +88,35 @@ void IRManager::handleInterrupt() {
 void IRManager::stopPulse() {
   ledOff();
   _sending = false;
+  _carrierTest = false;
+}
+
+void IRManager::pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs) {
+  mbed::CriticalSectionLock lock;
+  if (_rawHead - _rawTail >= (uint32_t)_RAW_BUFFER_SIZE) {
+    _rawDropped++;
+    return;
+  }
+  RawEvent& slot = _rawEvents[_rawHead % _RAW_BUFFER_SIZE];
+  slot.kind = kind;
+  slot.tUs = tUs;
+  slot.widthUs = widthUs;
+  _rawHead++;
+}
+
+bool IRManager::popRawEvent(RawEvent& event) {
+  mbed::CriticalSectionLock lock;
+  if (_rawTail == _rawHead) return false;
+  event = _rawEvents[_rawTail % _RAW_BUFFER_SIZE];
+  _rawTail++;
+  return true;
+}
+
+uint32_t IRManager::takeDroppedEvents() {
+  mbed::CriticalSectionLock lock;
+  uint32_t dropped = _rawDropped;
+  _rawDropped = 0;
+  return dropped;
 }
 
 void IRManager::ledOff() { _IRLED.write(_PWM_INVERTED ? 1.0f : 0.0f); }
