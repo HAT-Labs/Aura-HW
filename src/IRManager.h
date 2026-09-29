@@ -32,6 +32,7 @@ private:
 
   static const unsigned long _BASE_WIDTH_US = 1000;
   static const unsigned long _STEP_WIDTH_US = 400;
+  static const int _MAX_IDS = 16; // irLookedBitmask is 16 bits
 
   // Carrier: 28 us period = ~36 kHz. The LED on-time is set in whole us, 2-14 us (7-50 %);
   // Vishay's receivers accept 5-50 % carrier duty.

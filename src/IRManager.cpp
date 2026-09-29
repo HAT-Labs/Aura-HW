@@ -21,7 +21,13 @@ void IRManager::setIdentity(int assignedID) {
 }
 
 int IRManager::readIdentity(int pulseDuration) {
-  return (pulseDuration - _BASE_WIDTH_US) / _STEP_WIDTH_US;
+  // Round to the nearest ID: each ID accepts its nominal width +/- half a step, because the receiver
+  // can shorten or lengthen a pulse by several carrier cycles. Anything outside the windows of
+  // IDs 0 .. _MAX_IDS-1 is noise and returns -1. Signed math: the constants are unsigned.
+  long fromFirstWindow = (long)pulseDuration - (long)_BASE_WIDTH_US + (long)_STEP_WIDTH_US / 2;
+  if (fromFirstWindow < 0) return -1;
+  long id = fromFirstWindow / (long)_STEP_WIDTH_US;
+  return id < _MAX_IDS ? (int)id : -1;
 }
 
 void IRManager::setCarrierDuty(int percent) {
