@@ -6,8 +6,10 @@
 
 BLEManager::BLEManager() : 
   _currentState(STATE_DISCONNECTED), _assignedID(-1), _requestedModalities(0),
+  _carrierDutyPercent(50), _carrierDutyUpdated(false),
   _sensorService(SERVICE_UUID),
-  _configChar(CONFIG_CHAR_UUID, BLERead | BLEWrite, 2),
+  // {ID, modality mask} or {ID, modality mask, IR carrier duty %}
+  _configChar(CONFIG_CHAR_UUID, BLERead | BLEWrite, 3),
   // Allocate characteristic size dynamically using our struct dimension
   _dataChar(DATA_CHAR_UUID, BLERead | BLENotify, sizeof(SensorPacket)) 
 {}
@@ -40,11 +42,23 @@ void BLEManager::update() {
 
 void BLEManager::handleConfigWrite() {
   const byte* payload = _configChar.value();
-  if (_configChar.valueLength() == 2) {
+  int length = _configChar.valueLength();
+  if (length == 2 || length == 3) {
     _assignedID = payload[0];
     _requestedModalities = payload[1];
+    if (length == 3) {
+      _carrierDutyPercent = payload[2];
+      _carrierDutyUpdated = true;
+    }
     _currentState = STATE_STREAMING;
   }
+}
+
+bool BLEManager::takeCarrierDutyUpdate(int& percent) {
+  if (!_carrierDutyUpdated) return false;
+  _carrierDutyUpdated = false;
+  percent = _carrierDutyPercent;
+  return true;
 }
 
 SystemState BLEManager::getState() { return _currentState; }

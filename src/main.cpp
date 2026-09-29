@@ -19,6 +19,31 @@ void triggerTX() { flagSendTX = true; }
 // Track whether the assigned ID has been pushed to IRManager for pulse width configuration
 bool identityConfigured = false;
 
+// --- Bench commands over USB serial, one per line ---
+// DUTY <percent> : IR carrier duty (LED on-time per 28 us period), 7-50 %
+String serialLine;
+
+void printCarrierDuty() {
+  Serial.println("IR carrier duty: " + String(ir.getCarrierOnUs()) + "/" + String(ir.getCarrierPeriodUs()) +
+                 " us on (" + String(100.0f * ir.getCarrierOnUs() / ir.getCarrierPeriodUs(), 1) + " %)");
+}
+
+void handleSerialCommands() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c != '\n') { serialLine += c; continue; }
+    serialLine.trim();
+    serialLine.toUpperCase();
+    if (serialLine.startsWith("DUTY ")) {
+      ir.setCarrierDuty(serialLine.substring(5).toInt());
+      printCarrierDuty();
+    } else if (serialLine.length() > 0) {
+      Serial.println("Unknown command: " + serialLine);
+    }
+    serialLine = "";
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -27,6 +52,7 @@ void setup() {
 
   ir.begin();
   Serial.println("IR Initialized.");
+  printCarrierDuty();
 
   if( !IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
@@ -46,6 +72,14 @@ void setup() {
 
 void loop() {
   ble.update();
+  handleSerialCommands();
+
+  // Apply a carrier duty sent by the laptop (optional third config byte). The latest command wins.
+  int dutyPercent;
+  if (ble.takeCarrierDutyUpdate(dutyPercent)) {
+    ir.setCarrierDuty(dutyPercent);
+    printCarrierDuty();
+  }
 
   // Configure the IRManager with the assigned ID when BLE is streaming
   if( ble.getState() == STATE_STREAMING && !identityConfigured) {

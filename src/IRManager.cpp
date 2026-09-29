@@ -5,14 +5,14 @@ IRManager* IRManager::_instance = nullptr;
 IRManager::IRManager(int recvPin, int ledPin) 
   : _recvPin(recvPin), _IRLED(digitalPinToPinName(ledPin)), 
     _sending(false), _messageReceived(false), _readUserTime(0), 
-    _pulseWidthUs(_BASE_WIDTH_US) {
+    _pulseWidthUs(_BASE_WIDTH_US), _carrierOnUs(_MAX_CARRIER_ON_US) {
   _instance = this;
 }
 
 void IRManager::begin() {
   pinMode(_recvPin, INPUT);
   attachInterrupt(digitalPinToInterrupt(_recvPin), isrWrapper, CHANGE);
-  _IRLED.write(1.0f); // Keep OFF initially (Low-Side MOSFET optimization)
+  ledOff(); // Keep OFF initially
 }
 
 void IRManager::setIdentity(int assignedID) {
@@ -24,10 +24,20 @@ int IRManager::readIdentity(int pulseDuration) {
   return (pulseDuration - _BASE_WIDTH_US) / _STEP_WIDTH_US;
 }
 
+void IRManager::setCarrierDuty(int percent) {
+  // Whole microseconds, so the on-time actually sent is known exactly
+  int onUs = (percent * _CARRIER_PERIOD_US + 50) / 100;
+  _carrierOnUs = constrain(onUs, _MIN_CARRIER_ON_US, _MAX_CARRIER_ON_US);
+}
+
+int IRManager::getCarrierOnUs() { return _carrierOnUs; }
+int IRManager::getCarrierPeriodUs() { return _CARRIER_PERIOD_US; }
+
 void IRManager::sendID() {
   _sending = true;
-  _IRLED.period_us(28); // 28us period = ~36kHz modulation
-  _IRLED.write(0.5f);   // Start oscillating
+  _IRLED.period_us(_CARRIER_PERIOD_US); // 28us period = ~36kHz modulation
+  // Start oscillating: the LED is on for _carrierOnUs of every period
+  _IRLED.pulsewidth_us(_PWM_INVERTED ? _CARRIER_PERIOD_US - _carrierOnUs : _carrierOnUs);
   _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
 }
 
@@ -54,9 +64,11 @@ void IRManager::handleInterrupt() {
 }
 
 void IRManager::stopPulse() {
-  _IRLED.write(1.0f); // Pull HIGH to turn OFF low-side MOSFET layout
+  ledOff();
   _sending = false;
 }
+
+void IRManager::ledOff() { _IRLED.write(_PWM_INVERTED ? 1.0f : 0.0f); }
 
 void IRManager::isrWrapper() { if (_instance) _instance->handleInterrupt(); }
 void IRManager::timeoutWrapper() { if (_instance) _instance->stopPulse(); }
