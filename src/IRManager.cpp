@@ -58,7 +58,7 @@ void IRManager::startCarrierTest(uint32_t ms) {
 void IRManager::startCarrier() {
   _IRLED.period_us(_CARRIER_PERIOD_US); // 28us period = ~36kHz modulation
   // Start oscillating: the LED is on for _carrierOnUs of every period
-  _IRLED.pulsewidth_us(_PWM_INVERTED ? _CARRIER_PERIOD_US - _carrierOnUs : _carrierOnUs);
+  _IRLED.pulsewidth_us(_carrierOnUs);
 }
 
 bool IRManager::hasNewMessage() { return _messageReceived; }
@@ -119,7 +119,7 @@ uint32_t IRManager::takeDroppedEvents() {
   return dropped;
 }
 
-void IRManager::ledOff() { _IRLED.write(_PWM_INVERTED ? 1.0f : 0.0f); }
+void IRManager::ledOff() { _IRLED.write(1.0f); } // holds D8 LOW on this core (see IRManager.h)
 
 void IRManager::isrWrapper() { if (_instance) _instance->handleInterrupt(); }
 void IRManager::timeoutWrapper() { if (_instance) _instance->stopPulse(); }

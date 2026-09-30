@@ -60,10 +60,9 @@ private:
   static const int _MIN_CARRIER_ON_US = 2;
   static const int _MAX_CARRIER_ON_US = 14;
 
-  // On this core the PwmOut output is inverted relative to mbed's docs: write(1.0f) holds D8 LOW, so the
-  // low-side MOSFET and LED are off (checked 2026-09-29: ~0 V across the 20 ohm resistor at idle).
-  // Scope check still pending that pulse widths invert too: DUTY 25 must light the LED 7 of every 28 us.
-  static const bool _PWM_INVERTED = true;
+  // PwmOut on this core: pulsewidth_us(n) drives D8 HIGH for n us per period, and D8 HIGH turns the low-side
+  // MOSFET and LED on (scope, 2026-09-30). The exception is 100 %: write(1.0f) holds D8 LOW, so it is the
+  // LED-off state (~0 V across the 20 ohm resistor at idle, 2026-09-29).
 
   static IRManager* _instance;
   static void isrWrapper();
