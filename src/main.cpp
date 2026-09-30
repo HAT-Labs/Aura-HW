@@ -12,9 +12,42 @@ BLEManager ble;
 SensorPacket currentPacket = {0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
 // --- Hardware Interrupt Tickers ---
-mbed::Ticker TXTicker;
+mbed::Ticker TXTicker; // BLE packets: fixed 100 ms, so the laptop gets a steady 10 Hz
 volatile bool flagSendTX = false;
 void triggerTX() { flagSendTX = true; }
+
+// IR beacons have their own timer so they can be jittered. Each beacon is scheduled on an absolute deadline:
+// previous + 100 ms - J/2 + U(0, J), so the mean stays 10 Hz and no error accumulates. J = 0 is the original
+// fixed period. Random offsets stop two nodes from overlapping, or blanking each other while transmitting,
+// beacon after beacon for minutes.
+const long BEACON_PERIOD_US = 100000;
+const long MAX_JITTER_MS = 50;
+mbed::Timeout beaconTimeout;
+mbed::HighResClock::time_point nextBeaconTime;
+volatile bool flagBeacon = false;
+volatile long beaconJitterMs = 20;
+uint32_t rngState = 1;
+
+uint32_t nextRandom() { // xorshift32, seeded per chip in setup() so no two nodes share a sequence
+  rngState ^= rngState << 13;
+  rngState ^= rngState >> 17;
+  rngState ^= rngState << 5;
+  return rngState;
+}
+
+void onBeacon();
+
+void scheduleBeacon() {
+  long spanUs = beaconJitterMs * 1000;
+  long offsetUs = spanUs > 0 ? (long)(nextRandom() % (uint32_t)(spanUs + 1)) - spanUs / 2 : 0;
+  nextBeaconTime += std::chrono::microseconds(BEACON_PERIOD_US + offsetUs);
+  beaconTimeout.attach_absolute(&onBeacon, nextBeaconTime);
+}
+
+void onBeacon() {
+  flagBeacon = true;
+  scheduleBeacon();
+}
 
 // Track whether the assigned ID has been pushed to IRManager for pulse width configuration
 bool identityConfigured = false;
@@ -22,8 +55,9 @@ bool identityConfigured = false;
 // --- Bench commands over USB serial, one per line ---
 // DUTY <percent> : IR carrier duty (LED on-time per 28 us period), 7-50 %
 // CARRIER [ms]   : continuous carrier at the current duty for ms (default 3000, max 5000), for a meter check
+// JITTER <ms>    : beacon jitter J, 0-50 ms (default 20 = 100 +/- 10 ms); 0 = fixed 100 ms period
 // RAW 0|1        : stop / resume the raw event lines (default on)
-// INFO           : I,<chip uid>,<assigned ID>,<carrier on us>,<carrier period us>,<BLE state>
+// INFO           : I,<chip uid>,<assigned ID>,<carrier on us>,<carrier period us>,<BLE state>,<jitter ms>
 // Raw event lines: R,<start us>,<width us>,<decoded ID or -1> for each received pulse,
 //                  T,<start us>,<burst us> for each own transmission, D,<n> if n events were lost
 String serialLine;
@@ -36,7 +70,18 @@ void printCarrierDuty() {
 
 void printInfo() {
   Serial.println("I," + BLEManager::nodeUid() + "," + String(ble.getAssignedID()) + "," +
-                 String(ir.getCarrierOnUs()) + "," + String(ir.getCarrierPeriodUs()) + "," + String((int)ble.getState()));
+                 String(ir.getCarrierOnUs()) + "," + String(ir.getCarrierPeriodUs()) + "," + String((int)ble.getState()) +
+                 "," + String(beaconJitterMs));
+}
+
+void setBeaconJitter(long ms) {
+  beaconJitterMs = constrain(ms, 0, MAX_JITTER_MS);
+  if (beaconJitterMs == 0) {
+    Serial.println("Beacon timing: fixed 100 ms");
+  } else {
+    Serial.println("Beacon timing: 100 ms +/- " + String(beaconJitterMs / 2.0f, 1) + " ms (random), jitter=" +
+                   String(beaconJitterMs));
+  }
 }
 
 void handleSerialCommands() {
@@ -54,6 +99,8 @@ void handleSerialCommands() {
       ir.startCarrierTest(ms);
       Serial.println("Carrier test: " + String(ms) + " ms continuous, " + String(ir.getCarrierOnUs()) + "/" +
                      String(ir.getCarrierPeriodUs()) + " us on");
+    } else if (serialLine.startsWith("JITTER ")) {
+      setBeaconJitter(serialLine.substring(7).toInt());
     } else if (serialLine == "RAW 0" || serialLine == "RAW 1") {
       rawLogging = serialLine.endsWith("1");
     } else if (serialLine == "INFO") {
@@ -91,6 +138,9 @@ void setup() {
   ir.begin();
   Serial.println("IR Initialized.");
   printCarrierDuty();
+  rngState = NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros();
+  if (rngState == 0) rngState = 1;
+  setBeaconJitter(beaconJitterMs);
 
   if( !IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
@@ -106,7 +156,9 @@ void setup() {
   printInfo();
 
   // Set streaming transmission rate (e.g., 10Hz / every 100ms)
-  TXTicker.attach(&triggerTX, 0.1); 
+  TXTicker.attach(&triggerTX, 0.1);
+  nextBeaconTime = mbed::HighResClock::now();
+  scheduleBeacon();
 }
 
 void loop() {
@@ -120,6 +172,10 @@ void loop() {
     ir.setCarrierDuty(dutyPercent);
     printCarrierDuty();
   }
+  int jitterMs;
+  if (ble.takeBeaconJitterUpdate(jitterMs)) { // optional fourth config byte
+    setBeaconJitter(jitterMs);
+  }
 
   // Configure the IRManager with the assigned ID when BLE is streaming
   if( ble.getState() == STATE_STREAMING && !identityConfigured) {
@@ -130,7 +186,13 @@ void loop() {
   if( ble.getState() != STATE_STREAMING ) {
     identityConfigured = false;
   }
-  
+
+  // IR beacon on its own (optionally jittered) schedule; only while streaming, after the ID is set, as before
+  if (flagBeacon) {
+    flagBeacon = false;
+    if (ble.getState() == STATE_STREAMING) ir.sendID();
+  }
+
   if (ble.getState() == STATE_STREAMING) {
 
     // 1. Accumulate IR glance detections asynchronously
@@ -205,9 +267,6 @@ void loop() {
         currentPacket.gyroY = 0.0f;
         currentPacket.gyroZ = 0.0f;
       }
-
-      // Simultaneously blast the IR identity pulse 
-      ir.sendID();
 
       // Send the packed 30-byte payload instantly to the laptop
       ble.sendPacket(currentPacket);

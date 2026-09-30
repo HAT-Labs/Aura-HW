@@ -25,6 +25,8 @@ public:
   bool isGyroRequested();
   // True once per config write that carried the optional third byte (IR carrier duty, percent)
   bool takeCarrierDutyUpdate(int& percent);
+  // True once per config write that carried the optional fourth byte (beacon jitter, ms)
+  bool takeBeaconJitterUpdate(int& ms);
   // This chip's 64-bit factory device ID as 16 hex characters; tells nodes apart in logs
   static String nodeUid();
 
@@ -37,6 +39,8 @@ private:
   byte _requestedModalities;
   int _carrierDutyPercent;
   bool _carrierDutyUpdated;
+  int _beaconJitterMs;
+  bool _beaconJitterUpdated;
 
   BLEService _sensorService;
   BLECharacteristic _configChar;
