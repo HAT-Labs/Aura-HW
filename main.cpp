@@ -362,10 +362,9 @@ bool algorithm3_quadratureCorrelation(double w0, double a0, unsigned long ts) {
     for (int i = 0; i < win_len; i++) {
       sum += fabs(data->z[i] - data->e[i]);
     }
-
     sum = sum * a0;
     print(sum);
-    if (sum > 12.50 && sum < 14.50 && (a0 < 1 && a0 > 0)) notifyHeadNod(2, ts);
+    if (sum > 5 && sum < 7.50 && (a0 < 0.5 && a0 > 0)) notifyHeadNod(2, ts);
     //Serial.println(sum);
     data ->i = 0;
   }
