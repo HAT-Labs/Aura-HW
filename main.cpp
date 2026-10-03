@@ -342,7 +342,7 @@ bool algorithm3_quadratureCorrelation(double w0, double a0, unsigned long ts) {
   // Serial.print(data -> xt);
   // Serial.print(" ");
   // Serial.println(a0);
-  
+  a0 *= -1;
   data->phase1 += data->phase_inc[0];
   if (data->phase1 > 2.0*PI) data->phase1 -= 2.0*PI;
   data->phase2 += data->phase_inc[1];
@@ -362,9 +362,15 @@ bool algorithm3_quadratureCorrelation(double w0, double a0, unsigned long ts) {
     for (int i = 0; i < win_len; i++) {
       sum += fabs(data->z[i] - data->e[i]);
     }
-    sum = sum * a0;
+    sum *= a0 * -1;
+    Serial.print(ts);
+    Serial.print(" ");
     print(sum);
-    if (sum > 5 && sum < 7.50 && (a0 < 0.5 && a0 > 0)) notifyHeadNod(2, ts);
+    if (sum > 5 && sum < 11.90 && (a0 > -1 && a0 < 0)) {
+       notifyHeadNod(2, ts);
+       digitalWrite(13, 1);    
+    }
+   
     //Serial.println(sum);
     data ->i = 0;
   }
@@ -378,6 +384,7 @@ bool algorithm3_quadratureCorrelation(double w0, double a0, unsigned long ts) {
   //   nodded = true; 
   // }
   // data->i++;
+
   return nodded;
   // if (dot_product > 0 && dot_product < 0.7) {
   //   notifyHeadNod(2, ts);
