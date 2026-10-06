@@ -26,6 +26,12 @@ public:
   int getCarrierOnUs();
   int getCarrierPeriodUs();
   void startCarrierTest(uint32_t ms); // continuous carrier at the current duty, then off; beacons pause
+  void setWidthCode(int baseUs, int stepUs);        // width code: one burst of base + step * ID
+  void setIntervalCode(int markCycles, int stepUs); // interval code: mark, gap, mark; ID in the leading-edge spacing
+  bool isIntervalCode();
+  int getCodeBase();   // width code: base in us; interval code: mark length in carrier cycles
+  int getCodeStepUs();
+  int getFrameUs();    // on-air length of this node's ID (one burst, or mark + gap + mark)
   bool popRawEvent(RawEvent& event);
   uint32_t takeDroppedEvents();       // events lost because the buffer was full since the last call
 
@@ -38,8 +44,12 @@ private:
   volatile bool _sending;
   volatile bool _messageReceived;
   volatile int _readUserTime;
-  volatile unsigned long _pulseWidthUs;
+  volatile unsigned long _pulseWidthUs; // whole frame: the burst (width code) or mark + gap + mark (interval code)
   int _carrierOnUs;
+  bool _intervalCode;
+  int _baseUs, _stepUs, _markCycles, _identity;
+  unsigned long _markUs, _gapUs;
+  volatile int _phase; // interval frame in progress: 1 = first mark, 2 = gap, 3 = second mark; 0 otherwise
   volatile bool _carrierTest;
   volatile uint32_t _pulseStartUs;
 
@@ -50,8 +60,9 @@ private:
   volatile uint32_t _rawTail;
   volatile uint32_t _rawDropped;
 
-  static const unsigned long _BASE_WIDTH_US = 1000;
-  static const unsigned long _STEP_WIDTH_US = 400;
+  static const int _DEFAULT_BASE_US = 1000;  // the original code: ID n = 1000 + 400 * n us
+  static const int _DEFAULT_STEP_US = 400;
+  static const int _DEFAULT_MARK_CYCLES = 12;
   static const int _MAX_IDS = 16; // irLookedBitmask is 16 bits
 
   // Carrier: 28 us period = ~36 kHz. The LED on-time is set in whole us, 2-14 us (7-50 %);
@@ -69,7 +80,8 @@ private:
   static void timeoutWrapper();
   
   void handleInterrupt();
-  void stopPulse();
+  void onTimeout();
+  void updateFrame();
   void ledOff();
   void startCarrier();
   void pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs);

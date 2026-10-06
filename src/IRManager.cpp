@@ -5,7 +5,9 @@ IRManager* IRManager::_instance = nullptr;
 IRManager::IRManager(int recvPin, int ledPin) 
   : _recvPin(recvPin), _IRLED(digitalPinToPinName(ledPin)), 
     _sending(false), _messageReceived(false), _readUserTime(0), 
-    _pulseWidthUs(_BASE_WIDTH_US), _carrierOnUs(_MAX_CARRIER_ON_US),
+    _pulseWidthUs(_DEFAULT_BASE_US), _carrierOnUs(_MAX_CARRIER_ON_US),
+    _intervalCode(false), _baseUs(_DEFAULT_BASE_US), _stepUs(_DEFAULT_STEP_US), _markCycles(_DEFAULT_MARK_CYCLES),
+    _identity(0), _markUs(0), _gapUs(0), _phase(0),
     _carrierTest(false), _pulseStartUs(0), _rawHead(0), _rawTail(0), _rawDropped(0) {
   _instance = this;
 }
@@ -17,17 +19,48 @@ void IRManager::begin() {
 }
 
 void IRManager::setIdentity(int assignedID) {
-  // identifiedUser = (pulseDuration - 900) / 200;
-  _pulseWidthUs = _BASE_WIDTH_US + (unsigned long)(assignedID * _STEP_WIDTH_US);
+  _identity = assignedID;
+  updateFrame();
 }
 
+void IRManager::setWidthCode(int baseUs, int stepUs) {
+  _intervalCode = false;
+  _baseUs = constrain(baseUs, 280, 5000); // 280 us = 10 carrier cycles, the receiver's shortest burst
+  _stepUs = constrain(stepUs, 20, 1000);
+  updateFrame();
+}
+
+void IRManager::setIntervalCode(int markCycles, int stepUs) {
+  _intervalCode = true;
+  _markCycles = constrain(markCycles, 10, 35); // >= 10 cycles to be detected; short marks suit either AGC type
+  _stepUs = constrain(stepUs, 20, 1000);
+  updateFrame();
+}
+
+void IRManager::updateFrame() {
+  if (_intervalCode) {
+    // The leading edges of the two marks are 2 * mark + step * ID apart; the gap is one mark long at ID 0
+    _markUs = (unsigned long)_markCycles * _CARRIER_PERIOD_US;
+    _gapUs = _markUs + (unsigned long)_stepUs * _identity;
+    _pulseWidthUs = 2 * _markUs + _gapUs;
+  } else {
+    _pulseWidthUs = (unsigned long)_baseUs + (unsigned long)_stepUs * _identity;
+  }
+}
+
+bool IRManager::isIntervalCode() { return _intervalCode; }
+int IRManager::getCodeBase() { return _intervalCode ? _markCycles : _baseUs; }
+int IRManager::getCodeStepUs() { return _stepUs; }
+int IRManager::getFrameUs() { return (int)_pulseWidthUs; }
+
 int IRManager::readIdentity(int pulseDuration) {
-  // Round to the nearest ID: each ID accepts its nominal width +/- half a step, because the receiver
-  // can shorten or lengthen a pulse by several carrier cycles. Anything outside the windows of
-  // IDs 0 .. _MAX_IDS-1 is noise and returns -1. Signed math: the constants are unsigned.
-  long fromFirstWindow = (long)pulseDuration - (long)_BASE_WIDTH_US + (long)_STEP_WIDTH_US / 2;
+  // Interval code: a single pulse is only a mark; frames are decoded from consecutive raw R lines
+  if (_intervalCode) return -1;
+  // Width code: round to the nearest ID; each ID accepts its nominal width +/- half a step, because the
+  // receiver can shorten or lengthen a pulse by several carrier cycles. Outside IDs 0 .. _MAX_IDS-1: -1.
+  long fromFirstWindow = (long)pulseDuration - (long)_baseUs + (long)_stepUs / 2;
   if (fromFirstWindow < 0) return -1;
-  long id = fromFirstWindow / (long)_STEP_WIDTH_US;
+  long id = fromFirstWindow / (long)_stepUs;
   return id < _MAX_IDS ? (int)id : -1;
 }
 
@@ -43,14 +76,21 @@ int IRManager::getCarrierPeriodUs() { return _CARRIER_PERIOD_US; }
 void IRManager::sendID() {
   if (_carrierTest) return; // a carrier test owns the LED until it ends
   _sending = true;
-  pushRawEvent('T', micros(), _pulseWidthUs);
+  pushRawEvent('T', micros(), _pulseWidthUs); // T line: frame start and whole frame length
   startCarrier();
-  _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
+  if (_intervalCode) {
+    _phase = 1; // first mark; onTimeout() runs the gap and the second mark
+    _stopPulseTimeout.attach_us(&timeoutWrapper, _markUs);
+  } else {
+    _phase = 0;
+    _stopPulseTimeout.attach_us(&timeoutWrapper, _pulseWidthUs); // Send the unique user ID for the specified duration
+  }
 }
 
 void IRManager::startCarrierTest(uint32_t ms) {
   _carrierTest = true;
   _sending = true;
+  _phase = 0;
   startCarrier();
   _stopPulseTimeout.attach_us(&timeoutWrapper, (us_timestamp_t)ms * 1000);
 }
@@ -85,10 +125,21 @@ void IRManager::handleInterrupt() {
   }
 }
 
-void IRManager::stopPulse() {
-  ledOff();
-  _sending = false;
-  _carrierTest = false;
+void IRManager::onTimeout() {
+  if (_phase == 1) {        // end of the first mark: LED off for the gap
+    ledOff();
+    _phase = 2;
+    _stopPulseTimeout.attach_us(&timeoutWrapper, _gapUs);
+  } else if (_phase == 2) { // second mark; the carrier period is still set from the first
+    _IRLED.pulsewidth_us(_carrierOnUs);
+    _phase = 3;
+    _stopPulseTimeout.attach_us(&timeoutWrapper, _markUs);
+  } else {                  // end of a burst, of the second mark, or of a carrier test
+    ledOff();
+    _phase = 0;
+    _sending = false;
+    _carrierTest = false;
+  }
 }
 
 void IRManager::pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs) {
@@ -122,4 +173,4 @@ uint32_t IRManager::takeDroppedEvents() {
 void IRManager::ledOff() { _IRLED.write(1.0f); } // holds D8 LOW on this core (see IRManager.h)
 
 void IRManager::isrWrapper() { if (_instance) _instance->handleInterrupt(); }
-void IRManager::timeoutWrapper() { if (_instance) _instance->stopPulse(); }
+void IRManager::timeoutWrapper() { if (_instance) _instance->onTimeout(); }

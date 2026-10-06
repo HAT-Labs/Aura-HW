@@ -49,6 +49,15 @@ void onBeacon() {
   scheduleBeacon();
 }
 
+// Restart the beacon schedule so the next beacon goes out offsetMs from now. Sent to two nodes back to back
+// over USB (a few ms apart at most), it lines their beacons up for E4 without a sync wire.
+void syncBeacons(long offsetMs) {
+  mbed::CriticalSectionLock lock;
+  beaconTimeout.detach();
+  nextBeaconTime = mbed::HighResClock::now() + std::chrono::milliseconds(offsetMs);
+  beaconTimeout.attach_absolute(&onBeacon, nextBeaconTime);
+}
+
 // Track whether the assigned ID has been pushed to IRManager for pulse width configuration
 bool identityConfigured = false;
 
@@ -56,12 +65,22 @@ bool identityConfigured = false;
 // DUTY <percent> : IR carrier duty (LED on-time per 28 us period), 7-50 %
 // CARRIER [ms]   : continuous carrier at the current duty for ms (default 3000, max 5000), for a meter check
 // JITTER <ms>    : beacon jitter J, 0-50 ms (default 20 = 100 +/- 10 ms); 0 = fixed 100 ms period
+// TX 0|1         : stop / resume this node's own IR beacons (default on); a silent receiver never blanks itself
+// ID <n> | ID OFF: bench mode: use IR ID n (0-15) and beacon without a Bluetooth connection; OFF returns to BLE control
+// WIDTH <b> <s>  : width code (default): one burst of b + s * ID us (b >= 280, s 20-1000)
+// INTERVAL <m> <s>: interval code: mark of m carrier cycles (10-35), gap of m cycles + s * ID us, mark;
+//                  receivers log both marks as R lines and frames are decoded from them afterwards
+// SYNC <ms>      : next beacon goes out ms (0-1000) from now; later beacons follow the usual schedule
 // RAW 0|1        : stop / resume the raw event lines (default on)
-// INFO           : I,<chip uid>,<assigned ID>,<carrier on us>,<carrier period us>,<BLE state>,<jitter ms>
+// INFO           : I,<chip uid>,<IR ID>,<carrier on us>,<carrier period us>,<BLE state>,<jitter ms>,<TX 0/1>,<bench 0/1>,
+//                  <code W/I>,<base us or mark cycles>,<step us>
 // Raw event lines: R,<start us>,<width us>,<decoded ID or -1> for each received pulse,
 //                  T,<start us>,<burst us> for each own transmission, D,<n> if n events were lost
 String serialLine;
 bool rawLogging = true;
+bool beaconsEnabled = true;
+bool benchMode = false; // beacon with a serial-assigned ID, no Bluetooth needed (bench experiments)
+int benchId = -1;
 
 void printCarrierDuty() {
   Serial.println("IR carrier duty: " + String(ir.getCarrierOnUs()) + "/" + String(ir.getCarrierPeriodUs()) +
@@ -69,9 +88,21 @@ void printCarrierDuty() {
 }
 
 void printInfo() {
-  Serial.println("I," + BLEManager::nodeUid() + "," + String(ble.getAssignedID()) + "," +
+  Serial.println("I," + BLEManager::nodeUid() + "," + String(benchMode ? benchId : ble.getAssignedID()) + "," +
                  String(ir.getCarrierOnUs()) + "," + String(ir.getCarrierPeriodUs()) + "," + String((int)ble.getState()) +
-                 "," + String(beaconJitterMs));
+                 "," + String(beaconJitterMs) + "," + String(beaconsEnabled ? 1 : 0) + "," + String(benchMode ? 1 : 0) +
+                 "," + String(ir.isIntervalCode() ? "I" : "W") + "," + String(ir.getCodeBase()) + "," + String(ir.getCodeStepUs()));
+}
+
+void printCode() {
+  if (ir.isIntervalCode()) {
+    Serial.println("Code: interval, marks " + String(ir.getCodeBase()) + " cycles (" +
+                   String(ir.getCodeBase() * ir.getCarrierPeriodUs()) + " us), step " + String(ir.getCodeStepUs()) +
+                   " us, this node's frame " + String(ir.getFrameUs()) + " us");
+  } else {
+    Serial.println("Code: width, base " + String(ir.getCodeBase()) + " us, step " + String(ir.getCodeStepUs()) +
+                   " us, this node's burst " + String(ir.getFrameUs()) + " us");
+  }
 }
 
 void setBeaconJitter(long ms) {
@@ -101,6 +132,33 @@ void handleSerialCommands() {
                      String(ir.getCarrierPeriodUs()) + " us on");
     } else if (serialLine.startsWith("JITTER ")) {
       setBeaconJitter(serialLine.substring(7).toInt());
+    } else if (serialLine == "ID OFF") {
+      benchMode = false;
+      Serial.println("Bench mode: off (ID and beacons follow Bluetooth again)");
+    } else if (serialLine.startsWith("ID ")) {
+      benchId = constrain(serialLine.substring(3).toInt(), 0, 15);
+      ir.setIdentity(benchId);
+      benchMode = true;
+      Serial.println("Bench mode: IR ID " + String(benchId) + ", beaconing without Bluetooth");
+    } else if (serialLine.startsWith("WIDTH ") || serialLine.startsWith("INTERVAL ")) {
+      bool interval = serialLine.startsWith("INTERVAL ");
+      int first = interval ? 9 : 6;
+      int space = serialLine.indexOf(' ', first);
+      if (space < 0) {
+        Serial.println(interval ? "Usage: INTERVAL <mark cycles> <step us>" : "Usage: WIDTH <base us> <step us>");
+      } else {
+        int a = serialLine.substring(first, space).toInt();
+        int s = serialLine.substring(space + 1).toInt();
+        if (interval) ir.setIntervalCode(a, s); else ir.setWidthCode(a, s);
+        printCode();
+      }
+    } else if (serialLine.startsWith("SYNC ")) {
+      long ms = constrain(serialLine.substring(5).toInt(), 0, 1000);
+      syncBeacons(ms);
+      Serial.println("Beacons re-synced: next in " + String(ms) + " ms");
+    } else if (serialLine == "TX 0" || serialLine == "TX 1") {
+      beaconsEnabled = serialLine.endsWith("1");
+      Serial.println(beaconsEnabled ? "Beacons: on" : "Beacons: off (receive only)");
     } else if (serialLine == "RAW 0" || serialLine == "RAW 1") {
       rawLogging = serialLine.endsWith("1");
     } else if (serialLine == "INFO") {
@@ -179,7 +237,7 @@ void loop() {
 
   // Configure the IRManager with the assigned ID when BLE is streaming
   if( ble.getState() == STATE_STREAMING && !identityConfigured) {
-    ir.setIdentity(ble.getAssignedID());
+    if (!benchMode) ir.setIdentity(ble.getAssignedID()); // a bench ID takes priority
     identityConfigured = true;
     Serial.println("IR Identity Configured for User ID: " + String(ble.getAssignedID()));
   } // Reset the ID if streaming is interrupted or disconnected
@@ -190,7 +248,7 @@ void loop() {
   // IR beacon on its own (optionally jittered) schedule; only while streaming, after the ID is set, as before
   if (flagBeacon) {
     flagBeacon = false;
-    if (ble.getState() == STATE_STREAMING) ir.sendID();
+    if ((ble.getState() == STATE_STREAMING || benchMode) && beaconsEnabled) ir.sendID();
   }
 
   if (ble.getState() == STATE_STREAMING) {
