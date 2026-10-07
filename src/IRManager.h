@@ -12,6 +12,8 @@ public:
     char kind;
     uint32_t tUs;
     uint32_t widthUs;
+    int16_t id; // 'R': ID decoded by the node (width code: this pulse; interval code: the frame this pulse
+                // completes, logged on its second mark); -1 = none
   };
 
   IRManager(int recvPin, int ledPin);
@@ -19,9 +21,10 @@ public:
   void sendID();
   bool hasNewMessage();
   int getReceivedTime();
+  int getReceivedIdentity(); // ID of the latest message, decoded in the receiver ISR for either code; -1 = none
   void clearMessageFlag();
   void setIdentity(int assignedID);
-  int readIdentity(int pulseDuration);
+  int readIdentity(int pulseDuration); // width code: rounding decoder for one pulse width
   void setCarrierDuty(int percent); // LED on-time per carrier period, rounded to whole us (7-50 %)
   int getCarrierOnUs();
   int getCarrierPeriodUs();
@@ -54,6 +57,10 @@ private:
   volatile uint32_t _pulseStartUs;
   volatile bool _rxLow;      // receiver output as last seen by the ISR (LOW = burst detected), tracked even while sending
   volatile bool _pulseValid; // the pulse in progress has not overlapped this node's own transmission
+  volatile int _receivedId;  // latest decoded ID (getReceivedIdentity)
+  // Interval code: the previous mark, waiting for the mark that completes its frame
+  volatile bool _havePrevMark;
+  volatile uint32_t _prevMarkStartUs, _prevMarkWidthUs;
 
   // Written from the receiver ISR and from sendID(), read by loop(); guarded by a critical section
   static const int _RAW_BUFFER_SIZE = 64;
@@ -86,6 +93,7 @@ private:
   void updateFrame();
   void ledOff();
   void startCarrier();
-  void pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs);
+  int decodeMark(uint32_t startUs, uint32_t widthUs);
+  void pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs, int id = -1);
 };
 #endif

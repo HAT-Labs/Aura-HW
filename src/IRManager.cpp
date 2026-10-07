@@ -1,4 +1,5 @@
 #include "IRManager.h"
+#include "IntervalDecoder.h"
 
 IRManager* IRManager::_instance = nullptr;
 
@@ -9,6 +10,7 @@ IRManager::IRManager(int recvPin, int ledPin)
     _intervalCode(false), _baseUs(_DEFAULT_BASE_US), _stepUs(_DEFAULT_STEP_US), _markCycles(_DEFAULT_MARK_CYCLES),
     _identity(0), _markUs(0), _gapUs(0), _phase(0),
     _carrierTest(false), _pulseStartUs(0), _rxLow(false), _pulseValid(false),
+    _receivedId(-1), _havePrevMark(false), _prevMarkStartUs(0), _prevMarkWidthUs(0),
     _rawHead(0), _rawTail(0), _rawDropped(0) {
   _instance = this;
 }
@@ -28,6 +30,7 @@ void IRManager::setWidthCode(int baseUs, int stepUs) {
   _intervalCode = false;
   _baseUs = constrain(baseUs, 280, 5000); // 280 us = 10 carrier cycles, the receiver's shortest burst
   _stepUs = constrain(stepUs, 20, 1000);
+  _havePrevMark = false;
   updateFrame();
 }
 
@@ -35,6 +38,7 @@ void IRManager::setIntervalCode(int markCycles, int stepUs) {
   _intervalCode = true;
   _markCycles = constrain(markCycles, 10, 35); // >= 10 cycles to be detected; short marks suit either AGC type
   _stepUs = constrain(stepUs, 20, 1000);
+  _havePrevMark = false; // a mark received under the old code never pairs with one under the new code
   updateFrame();
 }
 
@@ -55,7 +59,7 @@ int IRManager::getCodeStepUs() { return _stepUs; }
 int IRManager::getFrameUs() { return (int)_pulseWidthUs; }
 
 int IRManager::readIdentity(int pulseDuration) {
-  // Interval code: a single pulse is only a mark; frames are decoded from consecutive raw R lines
+  // Interval code: a single pulse is only a mark; frames are decoded from mark pairs (decodeMark)
   if (_intervalCode) return -1;
   // Width code: round to the nearest ID; each ID accepts its nominal width +/- half a step, because the
   // receiver can shorten or lengthen a pulse by several carrier cycles. Outside IDs 0 .. _MAX_IDS-1: -1.
@@ -106,6 +110,24 @@ void IRManager::startCarrier() {
 
 bool IRManager::hasNewMessage() { return _messageReceived; }
 int IRManager::getReceivedTime() { return _readUserTime; }
+int IRManager::getReceivedIdentity() { return _receivedId; }
+
+// Interval code: pair this mark with the previous one. Returns the frame's ID if the two form a valid frame (both
+// marks are then used up), else -1 and this mark waits for the next. Same algorithm and constants as the offline
+// decoder (tools/e4_analyze.py), so on-node and offline decodes of the same marks agree.
+int IRManager::decodeMark(uint32_t startUs, uint32_t widthUs) {
+  if (_havePrevMark) {
+    int id = IntervalDecoder::decodePair(_prevMarkStartUs, _prevMarkWidthUs, startUs, widthUs, _markCycles, _stepUs);
+    if (id >= 0) {
+      _havePrevMark = false;
+      return id;
+    }
+  }
+  _havePrevMark = true;
+  _prevMarkStartUs = startUs;
+  _prevMarkWidthUs = widthUs;
+  return -1;
+}
 void IRManager::clearMessageFlag() { _messageReceived = false; }
 
 // Only pulses that never overlap this node's own transmission are recorded. The own LED's light reaches the
@@ -126,9 +148,15 @@ void IRManager::handleInterrupt() {
   } else if (_pulseValid) {
     _pulseValid = false;
     _pulseTimer.stop();
-    _readUserTime = _pulseTimer.read_us();
-    _messageReceived = true;
-    pushRawEvent('R', _pulseStartUs, _readUserTime);
+    uint32_t widthUs = _pulseTimer.read_us();
+    _readUserTime = widthUs;
+    // Width code: every pulse is a message, as before. Interval code: only a mark that completes a frame is.
+    int id = _intervalCode ? decodeMark(_pulseStartUs, widthUs) : readIdentity((int)widthUs);
+    if (!_intervalCode || id >= 0) {
+      _receivedId = id;
+      _messageReceived = true;
+    }
+    pushRawEvent('R', _pulseStartUs, widthUs, id);
   }
 }
 
@@ -149,7 +177,7 @@ void IRManager::onTimeout() {
   }
 }
 
-void IRManager::pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs) {
+void IRManager::pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs, int id) {
   mbed::CriticalSectionLock lock;
   if (_rawHead - _rawTail >= (uint32_t)_RAW_BUFFER_SIZE) {
     _rawDropped++;
@@ -159,6 +187,7 @@ void IRManager::pushRawEvent(char kind, uint32_t tUs, uint32_t widthUs) {
   slot.kind = kind;
   slot.tUs = tUs;
   slot.widthUs = widthUs;
+  slot.id = (int16_t)id;
   _rawHead++;
 }
 

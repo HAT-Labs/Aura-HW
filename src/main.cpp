@@ -177,7 +177,7 @@ void printRawEvents() {
     if (!rawLogging) continue;
     if (event.kind == 'R') {
       snprintf(line, sizeof(line), "R,%lu,%lu,%d", (unsigned long)event.tUs, (unsigned long)event.widthUs,
-               ir.readIdentity((int)event.widthUs));
+               (int)event.id); // decoded in the receiver ISR (interval code: on a frame's second mark)
     } else {
       snprintf(line, sizeof(line), "T,%lu,%lu", (unsigned long)event.tUs, (unsigned long)event.widthUs);
     }
@@ -255,8 +255,7 @@ void loop() {
 
     // 1. Accumulate IR glance detections asynchronously
     if (ble.isIRRequested() && ir.hasNewMessage()) {
-      int pulseDuration = ir.getReceivedTime();
-      int identifiedUser = ir.readIdentity(pulseDuration); 
+      int identifiedUser = ir.getReceivedIdentity(); // decoded in the receiver ISR (width or interval code)
 
       if (identifiedUser >= 0 && identifiedUser < 16 && ble.getAssignedID() != identifiedUser) {
         bitWrite(currentPacket.irLookedBitmask, identifiedUser, 1);
