@@ -8,7 +8,8 @@ IRManager::IRManager(int recvPin, int ledPin)
     _pulseWidthUs(_DEFAULT_BASE_US), _carrierOnUs(_MAX_CARRIER_ON_US),
     _intervalCode(false), _baseUs(_DEFAULT_BASE_US), _stepUs(_DEFAULT_STEP_US), _markCycles(_DEFAULT_MARK_CYCLES),
     _identity(0), _markUs(0), _gapUs(0), _phase(0),
-    _carrierTest(false), _pulseStartUs(0), _rawHead(0), _rawTail(0), _rawDropped(0) {
+    _carrierTest(false), _pulseStartUs(0), _rxLow(false), _pulseValid(false),
+    _rawHead(0), _rawTail(0), _rawDropped(0) {
   _instance = this;
 }
 
@@ -76,6 +77,7 @@ int IRManager::getCarrierPeriodUs() { return _CARRIER_PERIOD_US; }
 void IRManager::sendID() {
   if (_carrierTest) return; // a carrier test owns the LED until it ends
   _sending = true;
+  _pulseValid = false; // a pulse already in progress now overlaps this burst: discard it
   pushRawEvent('T', micros(), _pulseWidthUs); // T line: frame start and whole frame length
   startCarrier();
   if (_intervalCode) {
@@ -90,6 +92,7 @@ void IRManager::sendID() {
 void IRManager::startCarrierTest(uint32_t ms) {
   _carrierTest = true;
   _sending = true;
+  _pulseValid = false;
   _phase = 0;
   startCarrier();
   _stopPulseTimeout.attach_us(&timeoutWrapper, (us_timestamp_t)ms * 1000);
@@ -105,23 +108,27 @@ bool IRManager::hasNewMessage() { return _messageReceived; }
 int IRManager::getReceivedTime() { return _readUserTime; }
 void IRManager::clearMessageFlag() { _messageReceived = false; }
 
+// Only pulses that never overlap this node's own transmission are recorded. The own LED's light reaches the
+// receiver, so a neighbor's pulse that runs into the own burst would only end when the own burst ends, and
+// its stretched width would decode as a wrong ID (E4, 2026-10-07). Discarding it turns that into a miss.
+// The receiver level is followed on every edge, even while sending, so it is never stale afterwards.
 void IRManager::handleInterrupt() {
-  if (!_sending) {
-    static bool lastState = HIGH;
-    bool currentState = digitalRead(_recvPin);
-    if (currentState != lastState) {
-      lastState = currentState;
-      if (currentState == LOW) { // IR Receivers usually pull LOW when detecting light
-        _pulseStartUs = micros();
-        _pulseTimer.reset();
-        _pulseTimer.start();
-      } else {
-        _pulseTimer.stop();
-        _readUserTime = _pulseTimer.read_us();
-        _messageReceived = true;
-        pushRawEvent('R', _pulseStartUs, _readUserTime);
-      }
+  bool low = digitalRead(_recvPin) == LOW; // IR receivers pull LOW while they detect a burst
+  if (low == _rxLow) return;
+  _rxLow = low;
+  if (low) {
+    _pulseValid = !_sending;               // starts during the own burst (or its own light): never valid
+    if (_pulseValid) {
+      _pulseStartUs = micros();
+      _pulseTimer.reset();
+      _pulseTimer.start();
     }
+  } else if (_pulseValid) {
+    _pulseValid = false;
+    _pulseTimer.stop();
+    _readUserTime = _pulseTimer.read_us();
+    _messageReceived = true;
+    pushRawEvent('R', _pulseStartUs, _readUserTime);
   }
 }
 

@@ -52,6 +52,8 @@ private:
   volatile int _phase; // interval frame in progress: 1 = first mark, 2 = gap, 3 = second mark; 0 otherwise
   volatile bool _carrierTest;
   volatile uint32_t _pulseStartUs;
+  volatile bool _rxLow;      // receiver output as last seen by the ISR (LOW = burst detected), tracked even while sending
+  volatile bool _pulseValid; // the pulse in progress has not overlapped this node's own transmission
 
   // Written from the receiver ISR and from sendID(), read by loop(); guarded by a critical section
   static const int _RAW_BUFFER_SIZE = 64;
