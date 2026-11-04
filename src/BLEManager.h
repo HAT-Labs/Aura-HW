@@ -23,6 +23,10 @@ public:
   bool isIMURequested();
   bool isMagRequested();
   bool isGyroRequested();
+  // True once per config write that carried the optional third byte (IR carrier duty, percent)
+  bool takeCarrierDutyUpdate(int& percent);
+  // True once per config write that carried the optional fourth byte (beacon jitter, ms)
+  bool takeBeaconJitterUpdate(int& ms);
 
   // Sends the entire consolidated struct over the air
   void sendPacket(const SensorPacket& packet);
@@ -31,6 +35,10 @@ private:
   SystemState _currentState;
   int _assignedID;
   byte _requestedModalities;
+  int _carrierDutyPercent;
+  bool _carrierDutyUpdated;
+  int _beaconJitterMs;
+  bool _beaconJitterUpdated;
 
   BLEService _sensorService;
   BLECharacteristic _configChar;
